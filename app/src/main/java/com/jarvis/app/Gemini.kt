@@ -15,7 +15,7 @@ home, back, recents, notifications, quick_settings, tap (arg screen par button k
 scroll_down, scroll_up, read_screen, wifi_panel, bluetooth_panel, call (arg number).
 Normal baat ho to action none. say me Hinglish me chhota (1 line) jawab do."""
 
-    fun ask(key: String, text: String): JSONObject? {
+    fun ask(key: String, text: String, extra: String = ""): JSONObject? {
         for (i in 0 until 6) {
             try {
                 val url = URL("https://generativelanguage.googleapis.com/v1beta/models/${models[i % 3]}:generateContent")
@@ -27,7 +27,7 @@ Normal baat ho to action none. say me Hinglish me chhota (1 line) jawab do."""
                 c.setRequestProperty("Content-Type", "application/json")
                 c.setRequestProperty("x-goog-api-key", key)
                 val body = JSONObject()
-                    .put("system_instruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", SYSTEM))))
+                    .put("system_instruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", SYSTEM + extra))))
                     .put("contents", JSONArray().put(JSONObject().put("role", "user")
                         .put("parts", JSONArray().put(JSONObject().put("text", text)))))
                     .put("generationConfig", JSONObject().put("responseMimeType", "application/json"))

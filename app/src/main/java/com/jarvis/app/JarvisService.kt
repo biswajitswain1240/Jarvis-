@@ -4,6 +4,7 @@ import android.app.*
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.drawable.Icon
 import android.hardware.camera2.CameraManager
 import android.media.AudioManager
 import android.net.Uri
@@ -23,6 +24,8 @@ class JarvisService : Service(), TextToSpeech.OnInitListener {
     private var awake = false
     private var alive = true
     private var torch = false
+    private var ready = false
+    private val wakeMode: Boolean get() = !getSharedPreferences("jarvis", MODE_PRIVATE).getBoolean("tap", false)
 
     private val wake = listOf("jarvis", "jarvish", "जार्विस", "जारविस", "ଜାର୍ଭିସ")
     private val blockPkgs = listOf("com.phonepe", "paisa", "paytm", "npci", "bhim", "upi", "bank", "wallet", "razorpay", "mobikwik", "freecharge")
@@ -30,13 +33,25 @@ class JarvisService : Service(), TextToSpeech.OnInitListener {
 
     override fun onBind(i: Intent?): IBinder? = null
 
+    override fun onStartCommand(i: Intent?, f: Int, id: Int): Int {
+        if (i?.action == "LISTEN" && ready) {
+            awake = true
+            main.post { if (!speaking) listen() }
+        }
+        return START_STICKY
+    }
+
     override fun onCreate() {
         super.onCreate()
         val ch = NotificationChannel("jarvis", "Jarvis", NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+        val pi = PendingIntent.getService(this, 0, Intent(this, JarvisService::class.java).setAction("LISTEN"),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val act = Notification.Action.Builder(Icon.createWithResource(this, android.R.drawable.ic_btn_speak_now), "Bolo", pi).build()
         val n = Notification.Builder(this, "jarvis")
-            .setContentTitle("Jarvis sun rahi hai")
-            .setSmallIcon(android.R.drawable.ic_btn_speak_now).build()
+            .setContentTitle("Jarvis taiyaar hai")
+            .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+            .addAction(act).build()
         if (Build.VERSION.SDK_INT >= 29)
             startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         else startForeground(1, n)
@@ -52,9 +67,10 @@ class JarvisService : Service(), TextToSpeech.OnInitListener {
             override fun onStart(id: String?) {}
             override fun onError(id: String?) { done() }
             override fun onDone(id: String?) { done() }
-            fun done() { main.post { speaking = false; listen() } }
+            fun done() { main.post { speaking = false; if (wakeMode || awake) listen() } }
         })
-        say("Jarvis taiyaar hai. Jarvis bolo aur phir command do.")
+        ready = true
+        say(if (wakeMode) "Jarvis taiyaar hai. Jarvis bolo." else "Jarvis taiyaar hai. Bolo button dabao.")
     }
 
     private fun say(t: String) {
@@ -70,9 +86,9 @@ class JarvisService : Service(), TextToSpeech.OnInitListener {
             sr?.setRecognitionListener(object : RecognitionListener {
                 override fun onResults(r: Bundle?) {
                     val t = r?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull() ?: ""
-                    if (t.isNotBlank()) heard(t.lowercase()) else restart()
+                    if (t.isNotBlank()) heard(t.lowercase()) else onNothing()
                 }
-                override fun onError(e: Int) { restart() }
+                override fun onError(e: Int) { onNothing() }
                 override fun onReadyForSpeech(p: Bundle?) {}
                 override fun onBeginningOfSpeech() {}
                 override fun onRmsChanged(v: Float) {}
@@ -88,7 +104,9 @@ class JarvisService : Service(), TextToSpeech.OnInitListener {
         sr?.startListening(i)
     }
 
-    private fun restart() { main.postDelayed({ listen() }, 500) }
+    private fun onNothing() { if (wakeMode) restart() else awake = false }
+
+    private fun restart() { main.postDelayed({ if (wakeMode || awake) listen() }, 500) }
 
     private fun heard(t: String) {
         var cmd = t
@@ -100,9 +118,16 @@ class JarvisService : Service(), TextToSpeech.OnInitListener {
         if (cmd in listOf("stop", "band karo", "exit")) { say("Theek hai, band kar rahi hu."); alive = false; main.postDelayed({ stopSelf() }, 3000); return }
         val key = getSharedPreferences("jarvis", MODE_PRIVATE).getString("key", "") ?: ""
         Thread {
-            val j = Gemini.ask(key, cmd)
+            val j = Gemini.ask(key, cmd, "\nInstalled apps: " + appLabels() + "\nopen_app ka arg isi list se exact naam hona chahiye.")
             main.post { if (j == null) say("Server busy hai, dobara bolo.") else execute(j, cmd) }
         }.start()
+    }
+
+    private fun appLabels(): String {
+        val pm = packageManager
+        val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        return pm.queryIntentActivities(q, 0).map { it.loadLabel(pm).toString() }
+            .filter { !isBlocked(it) }.distinct().sorted().take(400).joinToString(", ")
     }
 
     private fun isBlocked(pkgOrText: String): Boolean {
@@ -162,14 +187,15 @@ class JarvisService : Service(), TextToSpeech.OnInitListener {
         val n = name.lowercase().trim()
         if (n.isEmpty()) return false
         val pm = packageManager
+        val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         var best: Pair<String, String>? = null
-        for (app in pm.getInstalledApplications(0)) {
-            if (pm.getLaunchIntentForPackage(app.packageName) == null) continue
-            val label = pm.getApplicationLabel(app).toString().lowercase()
-            if (isBlocked(label) || isBlocked(app.packageName)) continue
-            if (label == n) { best = app.packageName to label; break }
+        for (ri in pm.queryIntentActivities(q, 0)) {
+            val pkg = ri.activityInfo.packageName
+            val label = ri.loadLabel(pm).toString().lowercase()
+            if (isBlocked(label) || isBlocked(pkg)) continue
+            if (label == n) { best = pkg to label; break }
             if (label.contains(n) || n.contains(label)) {
-                if (best == null || label.length < best.second.length) best = app.packageName to label
+                if (best == null || label.length < best.second.length) best = pkg to label
             }
         }
         val pkg = best?.first ?: return false

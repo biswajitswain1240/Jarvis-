@@ -42,6 +42,18 @@ class MainActivity : Activity() {
                 startForegroundService(Intent(this, JarvisService::class.java))
             }
         })
+        val modeBtn = Button(this)
+        fun refresh() { modeBtn.text = if (sp.getBoolean("tap", false)) "Mode: Tap-to-talk (mic sirf button par)" else "Mode: Wake word (Jarvis bolo)" }
+        refresh()
+        modeBtn.setOnClickListener {
+            sp.edit().putBoolean("tap", !sp.getBoolean("tap", false)).apply()
+            refresh()
+            Toast.makeText(this, "STOP phir START karo", Toast.LENGTH_LONG).show()
+        }
+        root.addView(modeBtn)
+        root.addView(btn("BOLO (tap karke bolo)") {
+            startService(Intent(this, JarvisService::class.java).setAction("LISTEN"))
+        })
         root.addView(btn("STOP") { stopService(Intent(this, JarvisService::class.java)) })
         setContentView(ScrollView(this).apply { addView(root) })
     }
